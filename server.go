@@ -1,31 +1,43 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"os"
+	"os/user"
+	"path"
 	"path/filepath"
 	"time"
 
 	"github.com/koofr/graval"
 )
 
-type FileSystemDriver struct {
-
-	// TODO: add multiple users
+type User struct {
 	Username string
 	Password string
 	FsRoot   string
 }
 
+type FileSystemDriver struct {
+	Users      []User
+	AuthedUser *User
+}
+
 func (d *FileSystemDriver) resolvePath(path string) string {
-	return filepath.Join(d.FsRoot, filepath.Clean(path))
+	return filepath.Join(d.AuthedUser.FsRoot, filepath.Clean(path))
 }
 
 func (d *FileSystemDriver) Authenticate(username, password string) bool {
-	return username == d.Username && password == d.Password
+	for _, user := range d.Users {
+		if user.Username == username && user.Password == password {
+			d.AuthedUser = &user
+			return true
+		}
+	}
+	return false
 }
 
 func (d *FileSystemDriver) Bytes(path string) int64 {
@@ -120,34 +132,56 @@ func (d *FileSystemDriver) PutFile(path string, reader io.Reader) bool {
 	return true
 }
 
-type DriverFactory struct{}
+type FSDriverFactory struct {
+	Users []User
+}
 
-func (d *DriverFactory) NewDriver() (graval.FTPDriver, error) {
+func (d *FSDriverFactory) NewDriver() (graval.FTPDriver, error) {
 	driver := FileSystemDriver{
-		Username: "username",
-		Password: "password",
-		FsRoot:   ".",
+		Users:      d.Users,
+		AuthedUser: nil,
 	}
 	return graval.FTPDriver(&driver), nil
 }
 
-func main() {
-	fmt.Println("HI!")
-	host := "127.0.0.1"
-	port := 8021
-	username := "test"
-	password := "test"
+type FTPServerJsonConfig struct {
+	Host  string
+	Port  int
+	Users []User
+}
 
-	factory := &DriverFactory{}
+func main() {
+	usr, err := user.Current()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	configFile, err := os.Open(path.Join(usr.HomeDir, ".easyftp"))
+
+	if err != nil {
+		fmt.Printf("Error! No config file at %s\n", path.Join(usr.HomeDir, ".easyftp"))
+		return
+	}
+
+	var config FTPServerJsonConfig
+	err = json.NewDecoder(configFile).Decode(&config)
+	if err != nil {
+		fmt.Printf("Error! Error parsing JSON in config at ~/.easyftp. Error: %v\n", err)
+		return
+	}
+
+	factory := &FSDriverFactory{
+		Users: config.Users,
+	}
 
 	server := graval.NewFTPServer(&graval.FTPServerOpts{
 		ServerName: "Example FTP server",
 		Factory:    graval.FTPDriverFactory(factory),
-		Hostname:   host,
-		Port:       port,
+		Hostname:   config.Host,
+		Port:       config.Port,
 		PassiveOpts: &graval.PassiveOpts{
-			ListenAddress: host,
-			NatAddress:    host,
+			ListenAddress: config.Host,
+			NatAddress:    config.Host,
 			PassivePorts: &graval.PassivePorts{
 				Low:  42000,
 				High: 45000,
@@ -155,11 +189,10 @@ func main() {
 		},
 	})
 
-	log.Printf("Example FTP server listening on %s:%d", host, port)
-	log.Printf("Access: ftp://%s:%s@%s:%d/", username, password, host, port)
+	log.Printf("Example FTP server listening on %s:%d\n", config.Host, config.Port)
+	log.Printf("Loaded %d users.\n", len(config.Users))
 
-	err := server.ListenAndServe()
-
+	err = server.ListenAndServe()
 	if err != nil {
 		log.Fatal(err)
 	}
