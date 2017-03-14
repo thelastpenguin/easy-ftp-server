@@ -1,4 +1,4 @@
-# Easy FTP Server by Gareth George
+# Easy FTP Server
 Easy FTP Server is designed to be an extremely light weight and easy to configure FTP Server that simply works right out of the box for most simple use cases.
 
 Note that there are obvious security implications since the FTP Server runs as whatever user is hosting it so all files it will creates will, by default,
